@@ -1,0 +1,169 @@
+# =============================================================================
+# LLM Inference Proxy — Kubernetes Deployment (GKE-optimized)
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-inference-proxy
+  labels:
+    app: llm-inference-proxy
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llm-inference-proxy
+  template:
+    metadata:
+      labels:
+        app: llm-inference-proxy
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: llm-proxy
+          image: gcr.io/YOUR_PROJECT_ID/llm-inference-proxy:latest
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: GRPC_PORT
+              value: "50051"
+            - name: METRICS_PORT
+              value: "9090"
+            - name: REDIS_ADDR
+              value: "redis-service:6379"
+            - name: QDRANT_URL
+              value: "http://qdrant-service:6333"
+            - name: QDRANT_COLLECTION
+              value: "llm_cache"
+            - name: SIMILARITY_THRESHOLD
+              value: "0.95"
+            - name: CACHE_TTL
+              value: "1h"
+            - name: REQUEST_TIMEOUT
+              value: "30s"
+            - name: MAX_RETRIES
+              value: "3"
+            - name: CB_FAILURE_THRESHOLD
+              value: "5"
+            - name: CB_COOLDOWN
+              value: "30s"
+            # Sensitive keys — mount from Kubernetes Secrets
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: llm-proxy-secrets
+                  key: embedding-api-key
+            - name: OPENAI_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: llm-proxy-secrets
+                  key: openai-api-keys
+            - name: GEMINI_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: llm-proxy-secrets
+                  key: gemini-api-keys
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+            failureThreshold: 10
+            periodSeconds: 5
+
+---
+# =============================================================================
+# Service — Exposes gRPC + Metrics
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-inference-proxy
+  labels:
+    app: llm-inference-proxy
+spec:
+  type: ClusterIP
+  selector:
+    app: llm-inference-proxy
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+
+---
+# =============================================================================
+# Horizontal Pod Autoscaler — CPU + Memory
+# =============================================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: llm-inference-proxy-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference-proxy
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 120

@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package inferenceproxy;
+
+option go_package = "github.com/abdhe/llm-inference-proxy/proto";
+
+// InferenceRequest represents a client request to an LLM provider.
+message InferenceRequest {
+  string model       = 1;  // e.g. "gemini-pro", "gpt-4"
+  string prompt      = 2;  // The user prompt / query
+  float  temperature = 3;  // Sampling temperature (0.0–2.0)
+  int32  max_tokens  = 4;  // Maximum tokens in the response
+}
+
+// InferenceResponse represents the full response from an LLM provider.
+message InferenceResponse {
+  string text            = 1;  // Generated text
+  int32  prompt_tokens   = 2;  // Tokens consumed by the prompt
+  int32  output_tokens   = 3;  // Tokens generated in the response
+  bool   cache_hit       = 4;  // Whether the response came from cache
+  double latency_ms      = 5;  // End-to-end latency in milliseconds
+}
+
+// StreamChunk represents a single chunk in a streaming response.
+message StreamChunk {
+  string text   = 1;  // Partial text
+  bool   done   = 2;  // True if this is the final chunk
+  int32  prompt_tokens  = 3;  // Set only on the final chunk
+  int32  output_tokens  = 4;  // Set only on the final chunk
+}
+
+// InferenceService provides unary and streaming inference RPCs.
+service InferenceService {
+  // Infer performs a single unary inference call.
+  rpc Infer(InferenceRequest) returns (InferenceResponse);
+
+  // InferStream performs a server-side streaming inference call.
+  rpc InferStream(InferenceRequest) returns (stream StreamChunk);
+}
